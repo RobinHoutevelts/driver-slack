@@ -65,7 +65,15 @@ class SlackDriver extends HttpDriver implements VerifiesService
             $this->payload = $request->request;
             $this->event = Collection::make($request->request->all());
         } else {
-            $this->payload = new ParameterBag((array) json_decode($request->getContent(), true));
+            $payload = (array) json_decode($request->getContent(), true);
+            if (empty($payload) && $request->getMethod() === 'GET') {
+                parse_str($request->getContent(), $payload);
+                if ($payload) {
+                    $payload = ['event' => $payload];
+                }
+            }
+
+            $this->payload = new ParameterBag($payload);
             $this->event = Collection::make($this->payload->get('event'));
             if (! empty($this->config['token']) && empty($this->botID)) {
                 $this->getBotUserId();
