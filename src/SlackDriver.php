@@ -68,8 +68,11 @@ class SlackDriver extends HttpDriver implements VerifiesService
             $payload = (array) json_decode($request->getContent(), true);
             if (empty($payload) && $request->getMethod() === 'GET') {
                 parse_str($request->getContent(), $payload);
-                if ($payload) {
-                    $payload = ['event' => $payload];
+                if (isset($payload['payload'])) {
+                    $payload = (array) json_decode($payload['payload'], true);
+                }
+                if ($payload && empty($payload['event'])) {
+                    $payload['event'] = $payload;
                 }
             }
 
@@ -100,6 +103,10 @@ class SlackDriver extends HttpDriver implements VerifiesService
      */
     public function hasMatchingEvent()
     {
+        // Todo: check what this is
+        // It always returns a Generic thingy so in
+        // $this->firedDriverEvents = true;
+        return false;
         // Retrieve the 'event' part of the payload
         $eventData = $this->payload->get('event');
 
@@ -125,12 +132,24 @@ class SlackDriver extends HttpDriver implements VerifiesService
      */
     public function getConversationAnswer(IncomingMessage $message)
     {
-        if ($this->payload instanceof Collection) {
-            if ($this->payload->get('type') === self::TYPE_DIALOG_SUBMISSION) {
+        // I don't care why sometimes it's a ParameterBag and sometimes a Collection.
+        $payload = $this->payload;
+        if ($payload instanceof ParameterBag) {
+            $payload = Collection::make($payload);
+        }
+
+        if (
+            $payload instanceof Collection
+            && (
+                $payload->get('type') === self::TYPE_DIALOG_SUBMISSION
+                || $payload->has('actions')
+            )
+        ) {
+            if ($payload->get('type') === self::TYPE_DIALOG_SUBMISSION) {
                 $name = self::TYPE_DIALOG_SUBMISSION;
-                $value = $this->payload->get('submission');
-            } else {
-                $action = Collection::make($this->payload['actions'][0]);
+                $value = $payload->get('submission');
+            } elseif (isset($payload['actions'][0])) {
+                $action = Collection::make($payload['actions'][0]);
                 $name = $action->get('name');
                 if ($action->get('type') === 'select') {
                     $value = $action->get('selected_options');
@@ -143,7 +162,7 @@ class SlackDriver extends HttpDriver implements VerifiesService
                 ->setInteractiveReply(true)
                 ->setValue($value)
                 ->setMessage($message)
-                ->setCallbackId($this->payload->get('callback_id'));
+                ->setCallbackId($payload->get('callback_id'));
         }
 
         return Answer::create($this->event->get('text'))->setMessage($message);
@@ -186,8 +205,23 @@ class SlackDriver extends HttpDriver implements VerifiesService
             $channel_id = $this->event->get('channel_id');
         }
 
+        if (is_array($user_id) && isset($user_id['id'])) {
+            $user_id = $user_id['id'];
+        }
+
+        if (is_array($channel_id) && isset($channel_id['id'])) {
+            $channel_id = $channel_id['id'];
+        }
+
         $message = new IncomingMessage($messageText, $user_id, $channel_id, $this->event);
         $message->setIsFromBot($this->isBot());
+
+        if ($this->event->has('callback_id')) {
+            $lol = 1;
+            $message->setCustomConversationIdentifier(
+                $this->event->get('callback_id')
+            );
+        }
 
         $this->messages = [$message];
     }
@@ -320,18 +354,18 @@ class SlackDriver extends HttpDriver implements VerifiesService
          */
         if ($message instanceof Question) {
             $parameters['text'] = $message->getText();
-            $parameters['attachments'] = json_encode([$this->convertQuestion($message)]);
+            $parameters['attachments'] = [$this->convertQuestion($message)];
         } elseif ($message instanceof OutgoingMessage) {
             $parameters['text'] = $message->getText();
             $attachment = $message->getAttachment();
             if (! is_null($attachment)) {
                 if ($attachment instanceof Image) {
-                    $parameters['attachments'] = json_encode([
+                    $parameters['attachments'] = [
                         [
                             'title' => $attachment->getTitle(),
                             'image_url' => $attachment->getUrl(),
                         ],
-                    ]);
+                    ];
                 }
             }
         } else {
@@ -364,14 +398,14 @@ class SlackDriver extends HttpDriver implements VerifiesService
                 $parameters['text'] = '';
             }
             if (! isset($parameters['attachments'])) {
-                $parameters['attachments'] = json_encode([$this->convertQuestion($message)]);
+                $parameters['attachments'] = [$this->convertQuestion($message)];
             }
         } elseif ($message instanceof OutgoingMessage) {
             $parameters['text'] = $message->getText();
             $attachment = $message->getAttachment();
             if (! is_null($attachment)) {
                 if ($attachment instanceof Image) {
-                    $parameters['attachments'] = json_encode(['image_url' => $attachment->getUrl()]);
+                    $parameters['attachments'] = ['image_url' => $attachment->getUrl()];
                 }
             }
         } else {
