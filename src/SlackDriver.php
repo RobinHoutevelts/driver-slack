@@ -217,7 +217,6 @@ class SlackDriver extends HttpDriver implements VerifiesService
         $message->setIsFromBot($this->isBot());
 
         if ($this->event->has('callback_id')) {
-            $lol = 1;
             $message->setCustomConversationIdentifier(
                 $this->event->get('callback_id')
             );
@@ -278,7 +277,10 @@ class SlackDriver extends HttpDriver implements VerifiesService
      */
     public function buildServicePayload($message, $matchingMessage, $additionalParameters = [])
     {
-        if (! Collection::make($matchingMessage->getPayload())->has('team_domain')) {
+        if (
+            ! Collection::make($matchingMessage->getPayload())->has('team_domain')
+            && ! $this->event->has('callback_id') // We always respond in JSON to actions
+        ) {
             $this->resultType = self::RESULT_TOKEN;
             $payload = $this->replyWithToken($message, $matchingMessage, $additionalParameters);
         } else {
@@ -296,6 +298,11 @@ class SlackDriver extends HttpDriver implements VerifiesService
     public function sendPayload($payload)
     {
         if ($this->resultType == self::RESULT_TOKEN) {
+            if (isset($payload['attachments'])) {
+                // Fucking shit. chat.postMessage wants it encoded
+                // But plain JSON response does not. UuUGH
+                $payload['attachments'] = json_encode($payload['attachments']);
+            }
             return $this->http->post('https://slack.com/api/chat.postMessage', [], $payload);
         } elseif ($this->resultType == self::RESULT_DIALOG) {
             return $this->http->post('https://slack.com/api/dialog.open', [], $payload);
